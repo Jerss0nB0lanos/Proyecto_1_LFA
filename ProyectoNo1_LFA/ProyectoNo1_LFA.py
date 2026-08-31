@@ -5,6 +5,8 @@ Motor de Parsing, Validación y Simulación de AFD
 Todo en un solo archivo para evitar problemas de importación.
 """
 
+import re
+
 # ========================== CLASE AFD ==========================
 class AFD:
     """
@@ -63,15 +65,34 @@ def cargar_manual():
     nombre = input("Nombre o identificador del autómata: ").strip()
     afd = AFD(nombre)
 
-    # Estados
-    estados_str = input("Ingrese los estados (separados por comas): ").strip()
-    estados = [e.strip() for e in estados_str.split(",") if e.strip()]
-    afd.Q = set(estados)
+    # Estados: se revisan duplicados antes de convertir la lista a set.
+    while True:
+        estados_str = input("Ingrese los estados (separados por comas): ").strip()
+        estados = [e.strip() for e in estados_str.split(",") if e.strip()]
+        duplicados = {e for e in estados if estados.count(e) > 1}
+        if not estados:
+            print("Debe ingresar al menos un estado.")
+        elif duplicados:
+            print(f"Error: estados duplicados: {sorted(duplicados)}. Intente de nuevo.")
+        else:
+            afd.Q = set(estados)
+            break
 
-    # Alfabeto
-    sigma_str = input("Ingrese el alfabeto (símbolos separados por comas): ").strip()
-    sigma = [s.strip() for s in sigma_str.split(",") if s.strip()]
-    afd.Sigma = set(sigma)
+    # Alfabeto: también se revisan duplicados antes de usar set.
+    while True:
+        sigma_str = input("Ingrese el alfabeto (símbolos separados por comas): ").strip()
+        sigma = [s.strip() for s in sigma_str.split(",") if s.strip()]
+        duplicados = {s for s in sigma if sigma.count(s) > 1}
+        if not sigma:
+            print("Debe ingresar al menos un símbolo.")
+        elif duplicados:
+            print(f"Error: símbolos duplicados: {sorted(duplicados)}. Intente de nuevo.")
+        # Epsilon no forma parte del alfabeto porque no consume un símbolo de entrada.
+        elif any(s.casefold() in {"ε", "epsilon"} for s in sigma):
+            print("Error: ε no puede formar parte del alfabeto de un AFD.")
+        else:
+            afd.Sigma = set(sigma)
+            break
 
     # Estado inicial
     while True:
@@ -82,14 +103,21 @@ def cargar_manual():
         else:
             print(f"Error: '{q0}' no está en el conjunto de estados. Intente de nuevo.")
 
-    # Estados finales
+    # F puede ser vacío: el AFD es válido, aunque no aceptará cadenas.
     while True:
         finales_str = input("Ingrese los estados finales (separados por comas): ").strip()
         if not finales_str:
-            print("Debe ingresar al menos un estado final.")
-            continue
+            afd.F = set()
+            break
         finales = [f.strip() for f in finales_str.split(",") if f.strip()]
-        if all(f in afd.Q for f in finales):
+        # Se buscan duplicados antes de usar set para no ocultarlos.
+        duplicados = {f for f in finales if finales.count(f) > 1}
+        if duplicados:
+            print(
+                f"Error: estados finales duplicados: {sorted(duplicados)}. "
+                "Intente de nuevo."
+            )
+        elif all(f in afd.Q for f in finales):
             afd.F = set(finales)
             break
         else:
@@ -99,17 +127,25 @@ def cargar_manual():
     print("\nIngrese las transiciones una por una.")
     print("Formato: estado_origen, símbolo, estado_destino")
     print("Escriba 'fin' para terminar.")
+    # Regex exige exactamente tres elementos y permite espacios junto a las comas.
+    patron_transicion_manual = re.compile(
+        r"([^,\s]+)\s*,\s*([^,\s]+)\s*,\s*([^,\s]+)"
+    )
     while True:
         linea = input("Transición: ").strip()
         if linea.lower() == "fin":
             break
-        partes = [p.strip() for p in linea.split(",")]
-        if len(partes) != 3:
+        coincidencia = patron_transicion_manual.fullmatch(linea)
+        if not coincidencia:
             print("Formato incorrecto. Debe ser: origen, símbolo, destino")
             continue
-        origen, simbolo, destino = partes
+        origen, simbolo, destino = coincidencia.groups()
         if origen not in afd.Q:
             print(f"Error: '{origen}' no está en Q.")
+            continue
+        # Un AFD consume símbolos; no puede cambiar de estado usando epsilon.
+        if simbolo.casefold() in {"ε", "epsilon"}:
+            print("Error: un AFD no permite transiciones ε.")
             continue
         if simbolo not in afd.Sigma:
             print(f"Error: '{simbolo}' no está en Σ.")
@@ -129,10 +165,36 @@ def cargar_manual():
 def cargar_desde_archivo(ruta_archivo):
     """
     Lee un archivo de texto con el formato especificado y retorna un objeto AFD.
-    No utiliza expresiones regulares, solo métodos de cadena.
+    Las expresiones regulares validan la sintaxis completa de cada línea.
     """
     afd = AFD()
     modo_transiciones = False
+
+    # Un elemento no puede estar vacío ni contener comas o espacios.
+    elemento = r"[^,\s]+"
+    lista = rf"({elemento}(?:\s*,\s*{elemento})*)"
+
+    # fullmatch exige que toda la línea, de principio a fin, cumpla el patrón.
+    patrones_secciones = {
+        "NOMBRE": re.compile(r"NOMBRE\s*=\s*(\S+)\s*", re.IGNORECASE),
+        "ESTADOS": re.compile(rf"ESTADOS\s*=\s*{lista}\s*", re.IGNORECASE),
+        "ALFABETO": re.compile(rf"ALFABETO\s*=\s*{lista}\s*", re.IGNORECASE),
+        "INICIAL": re.compile(rf"INICIAL\s*=\s*({elemento})\s*", re.IGNORECASE),
+        # El grupo opcional permite escribir FINALES= para representar F vacío.
+        "FINALES": re.compile(
+            rf"FINALES\s*=\s*({elemento}(?:\s*,\s*{elemento})*)?\s*",
+            re.IGNORECASE
+        ),
+        "TRANSICIONES": re.compile(r"TRANSICIONES\s*:\s*", re.IGNORECASE)
+    }
+    # Tres elementos separados por comas: origen, símbolo y destino.
+    patron_transicion = re.compile(
+        rf"({elemento})\s*,\s*({elemento})\s*,\s*({elemento})"
+    )
+    secciones_encontradas = set()
+    secciones_esperadas = set(patrones_secciones)
+    valores_secciones = {}
+    transiciones_temporales = []
 
     try:
         with open(ruta_archivo, 'r', encoding='utf-8') as f:
@@ -142,59 +204,147 @@ def cargar_desde_archivo(ruta_archivo):
     except Exception as e:
         raise Exception(f"Error al leer el archivo: {e}")
 
+    # ETAPA 1: reconocer la sintaxis y guardar los datos temporalmente.
     for num_linea, linea_raw in enumerate(lineas, start=1):
         linea = linea_raw.strip()
         if not linea:
             continue
 
-        if modo_transiciones:
-            partes = [p.strip() for p in linea.split(',')]
-            if len(partes) != 3:
+        # Primero se comprueba si la línea es una sección principal.
+        seccion_actual = None
+        coincidencia = None
+        for nombre_seccion, patron in patrones_secciones.items():
+            resultado = patron.fullmatch(linea)
+            if resultado:
+                seccion_actual = nombre_seccion
+                coincidencia = resultado
+                break
+
+        if seccion_actual:
+            if seccion_actual in secciones_encontradas:
                 raise SyntaxError(
-                    f"Línea {num_linea}: formato de transición inválido (se esperan 3 campos): '{linea}'"
+                    f"Error de sintaxis en línea {num_linea}: "
+                    f"la sección {seccion_actual} está repetida."
                 )
-            origen, simbolo, destino = partes
-            try:
-                afd.agregar_transicion(origen, simbolo, destino)
-            except ValueError as e:
-                raise ValueError(f"Línea {num_linea}: {e}")
+            if modo_transiciones:
+                raise SyntaxError(
+                    f"Error de sintaxis en línea {num_linea}: no se permiten "
+                    f"secciones después de TRANSICIONES: '{linea}'"
+                )
+
+            secciones_encontradas.add(seccion_actual)
+            if seccion_actual == "TRANSICIONES":
+                modo_transiciones = True
+            else:
+                valores_secciones[seccion_actual] = (
+                    coincidencia.group(1), num_linea
+                )
             continue
 
-        # Detectar secciones por palabra clave al inicio de la línea
-        linea_upper = linea.upper()
-        if linea_upper.startswith("NOMBRE="):
-            afd.nombre = linea.split("=", 1)[1].strip()
-        elif linea_upper.startswith("ESTADOS="):
-            estados_str = linea.split("=", 1)[1].strip()
-            estados = [e.strip() for e in estados_str.split(",") if e.strip()]
-            afd.Q = set(estados)
-        elif linea_upper.startswith("ALFABETO="):
-            sigma_str = linea.split("=", 1)[1].strip()
-            sigma = [s.strip() for s in sigma_str.split(",") if s.strip()]
-            afd.Sigma = set(sigma)
-        elif linea_upper.startswith("INICIAL="):
-            q0 = linea.split("=", 1)[1].strip()
-            afd.q0 = q0
-        elif linea_upper.startswith("FINALES="):
-            finales_str = linea.split("=", 1)[1].strip()
-            finales = [f.strip() for f in finales_str.split(",") if f.strip()]
-            afd.F = set(finales)
-        elif linea_upper.startswith("TRANSICIONES:"):
-            modo_transiciones = True
-        else:
-            raise SyntaxError(
-                f"Línea {num_linea}: sintaxis no reconocida: '{linea}'"
-            )
+        if modo_transiciones:
+            coincidencia = patron_transicion.fullmatch(linea)
+            if not coincidencia:
+                raise SyntaxError(
+                    f"Error de sintaxis en línea {num_linea}: '{linea}'"
+                )
+            transiciones_temporales.append((num_linea,) + coincidencia.groups())
+            continue
 
-    # Validaciones básicas después de la lectura
+        raise SyntaxError(f"Error de sintaxis en línea {num_linea}: '{linea}'")
+
+    faltantes = secciones_esperadas - secciones_encontradas
+    if faltantes:
+        raise ValueError(
+            f"Faltan las siguientes secciones: {', '.join(sorted(faltantes))}."
+        )
+
+    # ETAPA 2: construir el AFD y validar relaciones entre sus componentes.
+    afd.nombre = valores_secciones["NOMBRE"][0]
+
+    estados_str, linea_estados = valores_secciones["ESTADOS"]
+    estados = [e.strip() for e in estados_str.split(",")]
+    duplicados = {e for e in estados if estados.count(e) > 1}
+    if duplicados:
+        raise ValueError(
+            f"Línea {linea_estados}: estados duplicados: {sorted(duplicados)}."
+        )
+    afd.Q = set(estados)
+
+    sigma_str, linea_sigma = valores_secciones["ALFABETO"]
+    sigma = [s.strip() for s in sigma_str.split(",")]
+    duplicados = {s for s in sigma if sigma.count(s) > 1}
+    if duplicados:
+        raise ValueError(
+            f"Línea {linea_sigma}: símbolos duplicados: {sorted(duplicados)}."
+        )
+    if any(s.casefold() in {"ε", "epsilon"} for s in sigma):
+        raise ValueError(
+            f"Línea {linea_sigma}: ε no puede formar parte del alfabeto de un AFD."
+        )
+    afd.Sigma = set(sigma)
+
+    q0, linea_inicial = valores_secciones["INICIAL"]
+    if q0 not in afd.Q:
+        raise ValueError(
+            f"Línea {linea_inicial}: el estado inicial '{q0}' no pertenece a Q."
+        )
+    afd.q0 = q0
+
+    finales_str, linea_finales = valores_secciones["FINALES"]
+    finales = []
+    if finales_str:
+        finales = [f.strip() for f in finales_str.split(",")]
+    duplicados = {f for f in finales if finales.count(f) > 1}
+    if duplicados:
+        raise ValueError(
+            f"Línea {linea_finales}: estados finales duplicados: "
+            f"{sorted(duplicados)}."
+        )
+    finales_invalidos = sorted(f for f in finales if f not in afd.Q)
+    if len(finales_invalidos) == 1:
+        raise ValueError(
+            f"Línea {linea_finales}: el estado final "
+            f"'{finales_invalidos[0]}' no pertenece a Q."
+        )
+    if len(finales_invalidos) > 1:
+        raise ValueError(
+            f"Línea {linea_finales}: los estados finales "
+            f"{finales_invalidos} no pertenecen a Q."
+        )
+    afd.F = set(finales)
+
+    for num_linea, origen, simbolo, destino in transiciones_temporales:
+        if origen not in afd.Q:
+            raise ValueError(
+                f"Línea {num_linea}: el estado origen '{origen}' no pertenece a Q."
+            )
+        if simbolo.casefold() in {"ε", "epsilon"}:
+            raise ValueError(
+                f"Línea {num_linea}: un AFD no permite transiciones ε."
+            )
+        if simbolo not in afd.Sigma:
+            raise ValueError(
+                f"Línea {num_linea}: el símbolo '{simbolo}' no pertenece al alfabeto."
+            )
+        if destino not in afd.Q:
+            raise ValueError(
+                f"Línea {num_linea}: el estado destino '{destino}' no pertenece a Q."
+            )
+        try:
+            afd.agregar_transicion(origen, simbolo, destino)
+        except ValueError as e:
+            raise ValueError(
+                f"Línea {num_linea}: la transición ({origen}, {simbolo}) "
+                f"tiene más de un destino; corresponde a un AFND y no a un AFD."
+            ) from e
+
+    # Validaciones básicas después de la construcción.
     if not afd.Q:
         raise ValueError("No se definieron estados (Q).")
     if not afd.Sigma:
         raise ValueError("No se definió el alfabeto (Σ).")
     if afd.q0 is None:
         raise ValueError("No se definió el estado inicial (q0).")
-    if not afd.F:
-        raise ValueError("No se definieron estados finales (F).")
 
     return afd
 
@@ -219,6 +369,9 @@ def validar_afd(afd):
         errores.append(f"Los siguientes estados finales no pertenecen a Q: {no_pertenecen}")
 
     for (origen, simbolo), destino in afd.delta.items():
+        # Epsilon convertiría la transición en una característica de un AFND-ε.
+        if simbolo.casefold() in {"ε", "epsilon"}:
+            errores.append("Un AFD no permite transiciones ε.")
         if origen not in afd.Q:
             errores.append(f"En transición ({origen}, {simbolo}) -> {destino}: origen no está en Q.")
         if simbolo not in afd.Sigma:
@@ -233,6 +386,27 @@ def validar_afd(afd):
                 errores.append(f"Falta transición para el par ({estado}, {simbolo}).")
 
     return errores
+
+
+def completar_con_estado_trampa(afd, transiciones_faltantes):
+    """Completa un AFD enviando las transiciones faltantes a un estado de trampa."""
+    nombre_trampa = "TRAMPA"
+    numero = 1
+    while nombre_trampa in afd.Q:
+        nombre_trampa = f"TRAMPA_{numero}"
+        numero += 1
+
+    afd.Q.add(nombre_trampa)
+
+    # Cada transición faltante dirige al estado de trampa.
+    for estado, simbolo in transiciones_faltantes:
+        afd.delta[(estado, simbolo)] = nombre_trampa
+
+    # Una vez en el estado de trampa, cualquier símbolo permanece en él.
+    for simbolo in afd.Sigma:
+        afd.delta[(nombre_trampa, simbolo)] = nombre_trampa
+
+    return nombre_trampa
 
 
 def analizar_estructura(afd):
@@ -323,7 +497,8 @@ def imprimir_traza(resultado, cadena):
     Imprime en consola la traza de la simulación.
     """
     print("\n--- TRAZA DE EJECUCIÓN ---")
-    print(f"Cadena evaluada: '{cadena}'")
+    cadena_mostrada = "ε" if cadena == "" else f"'{cadena}'"
+    print(f"Cadena evaluada: {cadena_mostrada}")
     for i, paso in enumerate(resultado["traza"], start=1):
         print(f"Paso {i}: Estado actual: {paso['estado']}, "
               f"Símbolo: '{paso['simbolo']}', Siguiente estado: {paso['destino']}")
@@ -359,7 +534,9 @@ def mostrar_historial(afd):
     print("\n--- HISTORIAL DE EVALUACIONES ---")
     for i, entrada in enumerate(afd.historial, start=1):
         estado = "ACEPTADA ✅" if entrada["aceptada"] else "RECHAZADA ❌"
-        print(f"{i}. Cadena: '{entrada['cadena']}' -> {estado} (Estado final: {entrada['estado_final']})")
+        cadena_mostrada = "ε" if entrada["cadena"] == "" else f"'{entrada['cadena']}'"
+        print(f"{i}. Cadena: {cadena_mostrada} -> {estado} "
+              f"(Estado final: {entrada['estado_final']})")
     print("-" * 30)
 
 
@@ -430,11 +607,33 @@ def menu_principal():
             else:
                 print("\n--- VALIDACIÓN Y ANÁLISIS ESTRUCTURAL ---")
                 errores = validar_afd(afd_actual)
+                transiciones_faltantes = []
+                for estado in afd_actual.Q:
+                    for simbolo in afd_actual.Sigma:
+                        if (estado, simbolo) not in afd_actual.delta:
+                            transiciones_faltantes.append((estado, simbolo))
+
                 if errores:
                     print("Se encontraron errores de integridad:")
                     for err in errores:
                         print(f"  - {err}")
-                else:
+
+                if transiciones_faltantes:
+                    respuesta = input(
+                        "¿Desea completar el AFD utilizando un estado de trampa? (S/N): "
+                    ).strip().upper()
+                    if respuesta == "S":
+                        nombre_trampa = completar_con_estado_trampa(
+                            afd_actual, transiciones_faltantes
+                        )
+                        print(f"Se creó el estado de trampa '{nombre_trampa}'.")
+                        errores = validar_afd(afd_actual)
+                        if errores:
+                            print("El autómata todavía presenta estos errores:")
+                            for err in errores:
+                                print(f"  - {err}")
+
+                if not errores:
                     print("✅ El AFD es estructuralmente válido y determinista.")
                     analisis = analizar_estructura(afd_actual)
                     print("\nAnálisis estructural:")
@@ -477,7 +676,15 @@ def menu_principal():
                     ruta = input("Ingrese la ruta del archivo con cadenas: ").strip()
                     try:
                         with open(ruta, 'r', encoding='utf-8') as f:
-                            cadenas = [linea.strip() for linea in f if linea.strip()]
+                            cadenas = []
+                            for linea in f:
+                                cadena = linea.strip()
+                                if not cadena:
+                                    continue
+                                # ε o epsilon representan la cadena vacía, no una transición.
+                                if cadena.casefold() in {"ε", "epsilon"}:
+                                    cadena = ""
+                                cadenas.append(cadena)
                         if not cadenas:
                             print("El archivo no contiene cadenas.")
                         else:
