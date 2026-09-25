@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Proyecto No. 1 - Lenguajes Formales y Autómatas
-Motor de Parsing, Validación y Simulación de AFD
+Proyecto No. 2 - Lenguajes Formales y Autómatas
+Motor de AFD, AFND, Conversión por Subconjuntos y Simulación
 Todo en un solo archivo para evitar problemas de importación.
 """
 
@@ -53,6 +53,64 @@ class AFD:
                 fila.append(self.delta.get((estado, sim), "-"))
             filas.append(fila)
         return header, filas
+
+
+class AFND:
+    """Representa un AFND como M = (Q, Sigma, delta, q0, F)."""
+    def __init__(self, nombre=""):
+        self.nombre = nombre
+        self.Q = set()
+        self.Sigma = set()
+        self.delta = {}  # (estado, simbolo) -> set de destinos
+        self.q0 = None
+        self.F = set()
+
+    def agregar_transicion(self, origen, simbolo, destinos):
+        """Guarda cero, uno o varios destinos para un mismo par."""
+        clave = (origen, simbolo)
+        if clave not in self.delta:
+            self.delta[clave] = set()
+        self.delta[clave].update(destinos)
+
+    def obtener_destinos(self, estado, simbolo):
+        return self.delta.get((estado, simbolo), set())
+
+    def __str__(self):
+        transiciones = {}
+        for clave, destinos in self.delta.items():
+            transiciones[clave] = set(destinos)
+        return (f"AFND: {self.nombre}\nQ = {self.Q}\nΣ = {self.Sigma}\n"
+                f"δ = {transiciones}\nq0 = {self.q0}\nF = {self.F}")
+
+    def tabla_transiciones(self):
+        header = ["Estado"] + sorted(self.Sigma)
+        filas = []
+        for estado in sorted(self.Q):
+            fila = [estado]
+            for simbolo in sorted(self.Sigma):
+                destinos = self.obtener_destinos(estado, simbolo)
+                if destinos:
+                    fila.append("{" + ",".join(sorted(destinos)) + "}")
+                else:
+                    fila.append("∅")
+            filas.append(fila)
+        return header, filas
+
+
+def es_epsilon(valor):
+    """Reconoce las formas prohibidas de epsilon sin importar mayúsculas."""
+    return valor.strip().casefold() in {"ε", "epsilon"}
+
+
+def generar_nombre_macroestado(indice):
+    """Genera A, B, ..., Z, AA, AB... para identificar macroestados."""
+    letras = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    indice += 1
+    nombre = ""
+    while indice > 0:
+        indice, residuo = divmod(indice - 1, 26)
+        nombre = letras[residuo] + nombre
+    return nombre
 
 
 # ========================== CARGA MANUAL Y DESDE ARCHIVO ==========================
@@ -349,6 +407,234 @@ def cargar_desde_archivo(ruta_archivo):
     return afd
 
 
+def cargar_manual_afnd():
+    """Solicita por consola los cinco componentes y transiciones de un AFND."""
+    print("\n--- CREACIÓN MANUAL DE AFND ---")
+    afnd = AFND(input("Nombre o identificador del autómata: ").strip())
+
+    while True:
+        texto = input("Ingrese los estados (separados por comas): ").strip()
+        estados = [e.strip() for e in texto.split(",") if e.strip()]
+        duplicados = {e for e in estados if estados.count(e) > 1}
+        if not estados:
+            print("Debe ingresar al menos un estado.")
+        elif duplicados:
+            print(f"Error: estados duplicados: {sorted(duplicados)}. Intente de nuevo.")
+        else:
+            afnd.Q = set(estados)
+            break
+
+    while True:
+        texto = input("Ingrese el alfabeto (símbolos separados por comas): ").strip()
+        simbolos = [s.strip() for s in texto.split(",") if s.strip()]
+        duplicados = {s for s in simbolos if simbolos.count(s) > 1}
+        if not simbolos:
+            print("Debe ingresar al menos un símbolo.")
+        elif duplicados:
+            print(f"Error: símbolos duplicados: {sorted(duplicados)}. Intente de nuevo.")
+        elif any(es_epsilon(s) for s in simbolos):
+            print("Error: ε no puede formar parte del alfabeto de un AFND.")
+        else:
+            afnd.Sigma = set(simbolos)
+            break
+
+    while True:
+        q0 = input("Ingrese el estado inicial: ").strip()
+        if q0 in afnd.Q:
+            afnd.q0 = q0
+            break
+        print(f"Error: '{q0}' no está en el conjunto de estados. Intente de nuevo.")
+
+    while True:
+        texto = input("Ingrese los estados finales (separados por comas): ").strip()
+        if not texto:
+            afnd.F = set()
+            break
+        finales = [f.strip() for f in texto.split(",") if f.strip()]
+        duplicados = {f for f in finales if finales.count(f) > 1}
+        if duplicados:
+            print(f"Error: estados finales duplicados: {sorted(duplicados)}. Intente de nuevo.")
+        elif not set(finales).issubset(afnd.Q):
+            print("Error: uno o más estados finales no pertenecen a Q. Intente de nuevo.")
+        else:
+            afnd.F = set(finales)
+            break
+
+    patron = re.compile(r"([^,\s]+)\s*,\s*([^,\s]+)\s*,\s*([^,\s]+(?:\s*\|\s*[^,\s]+)*)")
+    print("\nIngrese transiciones: origen, símbolo, destino1|destino2")
+    print("Use ∅ para indicar ausencia de destinos y 'fin' para terminar.")
+    while True:
+        linea = input("Transición: ").strip()
+        if linea.lower() == "fin":
+            break
+        coincidencia = patron.fullmatch(linea)
+        if not coincidencia:
+            print("Formato incorrecto. Debe ser: origen, símbolo, destino(s)")
+            continue
+        origen, simbolo, destinos_str = coincidencia.groups()
+        if origen not in afnd.Q:
+            print(f"Error: '{origen}' no está en Q.")
+            continue
+        if es_epsilon(simbolo) or es_epsilon(destinos_str):
+            print("Error: las transiciones ε no están permitidas.")
+            continue
+        if simbolo not in afnd.Sigma:
+            print(f"Error: '{simbolo}' no está en Σ.")
+            continue
+        if destinos_str == "∅":
+            destinos = set()
+        else:
+            lista_destinos = [d.strip() for d in destinos_str.split("|")]
+            if any(es_epsilon(d) for d in lista_destinos):
+                print("Error: las transiciones ε no están permitidas.")
+                continue
+            destinos = set(lista_destinos)
+            invalidos = destinos - afnd.Q
+            if invalidos:
+                print(f"Error: destinos no declarados en Q: {sorted(invalidos)}")
+                continue
+        afnd.agregar_transicion(origen, simbolo, destinos)
+        print("Transición agregada.")
+
+    return afnd
+
+
+def cargar_desde_archivo_afnd(ruta_archivo):
+    """Carga un AFND con regex, primero sintaxis y luego semántica."""
+    elemento = r"[^,\s|]+"
+    lista = rf"({elemento}(?:\s*,\s*{elemento})*)"
+    patrones = {
+        "NOMBRE": re.compile(r"NOMBRE\s*=\s*(\S+)\s*", re.IGNORECASE),
+        "TIPO": re.compile(r"TIPO\s*=\s*(AFND)\s*", re.IGNORECASE),
+        "ESTADOS": re.compile(rf"ESTADOS\s*=\s*{lista}\s*", re.IGNORECASE),
+        "ALFABETO": re.compile(rf"ALFABETO\s*=\s*{lista}\s*", re.IGNORECASE),
+        "INICIAL": re.compile(rf"INICIAL\s*=\s*({elemento})\s*", re.IGNORECASE),
+        "FINALES": re.compile(
+            rf"FINALES\s*=\s*({elemento}(?:\s*,\s*{elemento})*)?\s*",
+            re.IGNORECASE
+        ),
+        "TRANSICIONES": re.compile(r"TRANSICIONES\s*:\s*", re.IGNORECASE)
+    }
+    patron_transicion = re.compile(
+        rf"({elemento})\s*,\s*({elemento})\s*,\s*(∅|{elemento}(?:\s*\|\s*{elemento})*)"
+    )
+    encontrados = set()
+    valores = {}
+    transiciones = []
+    modo_transiciones = False
+
+    try:
+        with open(ruta_archivo, "r", encoding="utf-8") as archivo:
+            lineas = archivo.readlines()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"No se encontró el archivo: {ruta_archivo}")
+    except Exception as e:
+        raise Exception(f"Error al leer el archivo: {e}")
+
+    # Primera etapa: reconocer líneas completas y guardar datos temporales.
+    for num_linea, linea_raw in enumerate(lineas, start=1):
+        linea = linea_raw.strip()
+        if not linea:
+            continue
+        seccion = None
+        coincidencia = None
+        for nombre, patron in patrones.items():
+            resultado = patron.fullmatch(linea)
+            if resultado:
+                seccion = nombre
+                coincidencia = resultado
+                break
+        if seccion:
+            if seccion in encontrados:
+                raise SyntaxError(
+                    f"Error de sintaxis en línea {num_linea}: la sección {seccion} está repetida."
+                )
+            if modo_transiciones:
+                raise SyntaxError(
+                    f"Error de sintaxis en línea {num_linea}: no se permiten secciones "
+                    "después de TRANSICIONES."
+                )
+            encontrados.add(seccion)
+            if seccion == "TRANSICIONES":
+                modo_transiciones = True
+            else:
+                valores[seccion] = (coincidencia.group(1), num_linea)
+            continue
+        if modo_transiciones:
+            coincidencia = patron_transicion.fullmatch(linea)
+            if not coincidencia:
+                raise SyntaxError(f"Error de sintaxis en línea {num_linea}: '{linea}'")
+            transiciones.append((num_linea,) + coincidencia.groups())
+            continue
+        raise SyntaxError(f"Error de sintaxis en línea {num_linea}: '{linea}'")
+
+    faltantes = set(patrones) - encontrados
+    if faltantes:
+        raise ValueError(f"Faltan las siguientes secciones: {', '.join(sorted(faltantes))}.")
+
+    # Segunda etapa: construir conjuntos y comprobar relaciones semánticas.
+    afnd = AFND(valores["NOMBRE"][0])
+    estados_str, linea_estados = valores["ESTADOS"]
+    estados = [e.strip() for e in estados_str.split(",")]
+    duplicados = {e for e in estados if estados.count(e) > 1}
+    if duplicados:
+        raise ValueError(f"Línea {linea_estados}: estados duplicados: {sorted(duplicados)}.")
+    afnd.Q = set(estados)
+
+    sigma_str, linea_sigma = valores["ALFABETO"]
+    sigma = [s.strip() for s in sigma_str.split(",")]
+    duplicados = {s for s in sigma if sigma.count(s) > 1}
+    if duplicados:
+        raise ValueError(f"Línea {linea_sigma}: símbolos duplicados: {sorted(duplicados)}.")
+    if any(es_epsilon(s) for s in sigma):
+        raise ValueError(f"Línea {linea_sigma}: ε no puede formar parte del alfabeto de un AFND.")
+    afnd.Sigma = set(sigma)
+
+    q0, linea_inicial = valores["INICIAL"]
+    if q0 not in afnd.Q:
+        raise ValueError(f"Línea {linea_inicial}: el estado inicial '{q0}' no pertenece a Q.")
+    afnd.q0 = q0
+
+    finales_str, linea_finales = valores["FINALES"]
+    finales = [] if not finales_str else [f.strip() for f in finales_str.split(",")]
+    duplicados = {f for f in finales if finales.count(f) > 1}
+    if duplicados:
+        raise ValueError(
+            f"Línea {linea_finales}: estados finales duplicados: {sorted(duplicados)}."
+        )
+    invalidos = sorted(set(finales) - afnd.Q)
+    if invalidos:
+        raise ValueError(
+            f"Línea {linea_finales}: estados finales que no pertenecen a Q: {invalidos}."
+        )
+    afnd.F = set(finales)
+
+    for num_linea, origen, simbolo, destinos_str in transiciones:
+        if origen not in afnd.Q:
+            raise ValueError(f"Línea {num_linea}: el estado origen '{origen}' no pertenece a Q.")
+        if es_epsilon(simbolo) or es_epsilon(destinos_str):
+            raise ValueError(f"Línea {num_linea}: las transiciones ε no están permitidas.")
+        if simbolo not in afnd.Sigma:
+            raise ValueError(f"Línea {num_linea}: el símbolo '{simbolo}' no pertenece al alfabeto.")
+        if destinos_str == "∅":
+            destinos = set()
+        else:
+            lista_destinos = [d.strip() for d in destinos_str.split("|")]
+            if any(es_epsilon(d) for d in lista_destinos):
+                raise ValueError(
+                    f"Línea {num_linea}: las transiciones ε no están permitidas."
+                )
+            destinos = set(lista_destinos)
+            invalidos = sorted(destinos - afnd.Q)
+            if invalidos:
+                raise ValueError(
+                    f"Línea {num_linea}: estados destino que no pertenecen a Q: {invalidos}."
+                )
+        afnd.agregar_transicion(origen, simbolo, destinos)
+
+    return afnd
+
+
 # ========================== VALIDACIÓN Y ANÁLISIS ESTRUCTURAL ==========================
 def validar_afd(afd):
     """
@@ -386,6 +672,90 @@ def validar_afd(afd):
                 errores.append(f"Falta transición para el par ({estado}, {simbolo}).")
 
     return errores
+
+
+def validar_afnd(afnd):
+    """Valida la integridad de un AFND sin exigir una transición por cada par."""
+    errores = []
+    if afnd.q0 not in afnd.Q:
+        errores.append(f"El estado inicial '{afnd.q0}' no pertenece a Q.")
+    if not afnd.F.issubset(afnd.Q):
+        errores.append(f"Estados finales fuera de Q: {sorted(afnd.F - afnd.Q)}.")
+    if any(es_epsilon(s) for s in afnd.Sigma):
+        errores.append("ε no puede formar parte del alfabeto de un AFND.")
+    for (origen, simbolo), destinos in afnd.delta.items():
+        if origen not in afnd.Q:
+            errores.append(f"En ({origen}, {simbolo}): el origen no pertenece a Q.")
+        if es_epsilon(simbolo):
+            errores.append("Las transiciones ε no están permitidas.")
+        elif simbolo not in afnd.Sigma:
+            errores.append(f"En ({origen}, {simbolo}): el símbolo no pertenece a Σ.")
+        invalidos = destinos - afnd.Q
+        if invalidos:
+            errores.append(
+                f"En ({origen}, {simbolo}): destinos fuera de Q: {sorted(invalidos)}."
+            )
+    return errores
+
+
+def convertir_afnd_a_afd(afnd):
+    """Convierte un AFND a AFD mediante construcción manual de subconjuntos."""
+    errores = validar_afnd(afnd)
+    if errores:
+        raise ValueError("No se puede convertir un AFND inválido.")
+
+    subconjunto_inicial = frozenset({afnd.q0})
+    nombres = {}
+    pendientes = []
+    procesados = set()
+
+    def registrar(subconjunto):
+        if subconjunto not in nombres:
+            nombres[subconjunto] = generar_nombre_macroestado(len(nombres))
+            pendientes.append(subconjunto)
+        return nombres[subconjunto]
+
+    registrar(subconjunto_inicial)
+    afd = AFD(f"{afnd.nombre}_AFD")
+    afd.Sigma = set(afnd.Sigma)
+
+    while pendientes:
+        macroestado = pendientes.pop(0)
+        if macroestado in procesados:
+            continue
+        procesados.add(macroestado)
+        nombre_origen = nombres[macroestado]
+        afd.Q.add(nombre_origen)
+
+        for simbolo in sorted(afnd.Sigma):
+            union_destinos = set()
+            for estado in macroestado:
+                union_destinos.update(afnd.obtener_destinos(estado, simbolo))
+            destino = frozenset(union_destinos)
+            nombre_destino = registrar(destino)
+            afd.delta[(nombre_origen, simbolo)] = nombre_destino
+
+    afd.q0 = nombres[subconjunto_inicial]
+    for subconjunto, nombre in nombres.items():
+        afd.Q.add(nombre)
+        if subconjunto.intersection(afnd.F):
+            afd.F.add(nombre)
+
+    equivalencias = {
+        nombre: subconjunto for subconjunto, nombre in nombres.items()
+    }
+    return afd, equivalencias
+
+
+def imprimir_tabla_equivalencias(equivalencias):
+    """Muestra la relación entre nombres del AFD y subconjuntos del AFND."""
+    print("\n--- TABLA DE EQUIVALENCIAS ---")
+    print("Macroestado AFD | Estados AFND")
+    print("-" * 42)
+    for nombre in sorted(equivalencias):
+        estados = equivalencias[nombre]
+        representacion = "∅" if not estados else "{" + ",".join(sorted(estados)) + "}"
+        print(f"{nombre:<15} | {representacion}")
 
 
 def completar_con_estado_trampa(afd, transiciones_faltantes):
@@ -541,178 +911,260 @@ def mostrar_historial(afd):
 
 
 # ========================== MENÚ PRINCIPAL ==========================
+class EstadoSesion:
+    """Mantiene separados el autómata original y el resultado convertido."""
+    def __init__(self):
+        self.reiniciar()
+
+    def reiniciar(self):
+        self.afd_directo = None
+        self.afnd = None
+        self.afd_generado = None
+        self.equivalencias = None
+
+    def afd_activo(self):
+        if self.afd_generado is not None:
+            return self.afd_generado
+        return self.afd_directo
+
+
+def imprimir_tabla(header, filas, titulo):
+    print(f"\n--- {titulo} ---")
+    print(" | ".join(header))
+    print("-" * (len(header) * 8))
+    for fila in filas:
+        print(" | ".join(str(valor) for valor in fila))
+
+
 def mostrar_menu():
     """Muestra el menú principal."""
-    print("\n" + "=" * 50)
-    print("   MOTOR DE PARSING, VALIDACIÓN Y SIMULACIÓN DE AFD")
-    print("=" * 50)
+    print("\n" + "=" * 62)
+    print("   MOTOR DE AFD, AFND Y CONVERSIÓN POR SUBCONJUNTOS")
+    print("=" * 62)
     print("1. Crear AFD manualmente")
     print("2. Cargar AFD desde archivo .txt")
-    print("3. Mostrar definición formal del AFD")
-    print("4. Mostrar tabla de transición")
-    print("5. Validar la estructura del autómata")
-    print("6. Evaluar una cadena")
-    print("7. Evaluar un archivo de cadenas")
-    print("8. Consultar historial de evaluaciones")
-    print("9. Cargar o crear otro autómata")
-    print("10. Salir")
-    print("-" * 50)
+    print("3. Crear AFND manualmente")
+    print("4. Cargar AFND desde archivo .txt")
+    print("5. Mostrar definición formal y tabla del autómata cargado")
+    print("6. Validar estructura")
+    print("7. Convertir AFND a AFD")
+    print("8. Mostrar tabla de equivalencias")
+    print("9. Mostrar tabla del AFD generado")
+    print("10. Evaluar cadena")
+    print("11. Evaluar archivo de cadenas")
+    print("12. Historial")
+    print("13. Análisis estructural")
+    print("14. Cargar o crear otro autómata")
+    print("15. Salir")
+    print("-" * 62)
 
 
 def menu_principal():
     """Bucle principal del menú."""
-    afd_actual = None
+    sesion = EstadoSesion()
 
     while True:
         mostrar_menu()
         opcion = input("Seleccione una opción: ").strip()
 
         if opcion == "1":
-            afd_actual = cargar_manual()
+            nuevo = cargar_manual()
+            sesion.reiniciar()
+            sesion.afd_directo = nuevo
             print("\nAFD creado exitosamente.")
             input("Presione Enter para continuar...")
 
         elif opcion == "2":
             ruta = input("Ingrese la ruta del archivo .txt: ").strip()
             try:
-                afd_actual = cargar_desde_archivo(ruta)
+                nuevo = cargar_desde_archivo(ruta)
+                sesion.reiniciar()
+                sesion.afd_directo = nuevo
                 print(f"\nAFD cargado exitosamente desde '{ruta}'.")
             except Exception as e:
                 print(f"\nError: {e}")
             input("Presione Enter para continuar...")
 
         elif opcion == "3":
-            if afd_actual is None:
-                print("\nPrimero debe crear o cargar un AFD.")
-            else:
-                print("\n--- DEFINICIÓN FORMAL ---")
-                print(afd_actual)
+            nuevo = cargar_manual_afnd()
+            sesion.reiniciar()
+            sesion.afnd = nuevo
+            print("\nAFND creado exitosamente.")
             input("Presione Enter para continuar...")
 
         elif opcion == "4":
-            if afd_actual is None:
-                print("\nPrimero debe crear o cargar un AFD.")
-            else:
-                header, filas = afd_actual.tabla_transiciones()
-                print("\n--- TABLA DE TRANSICIÓN ---")
-                print(" | ".join(header))
-                print("-" * (len(header) * 6))
-                for fila in filas:
-                    print(" | ".join(str(c) for c in fila))
+            ruta = input("Ingrese la ruta del archivo .txt: ").strip()
+            try:
+                nuevo = cargar_desde_archivo_afnd(ruta)
+                sesion.reiniciar()
+                sesion.afnd = nuevo
+                print(f"\nAFND cargado exitosamente desde '{ruta}'.")
+            except Exception as e:
+                print(f"\nError: {e}")
             input("Presione Enter para continuar...")
 
         elif opcion == "5":
-            if afd_actual is None:
-                print("\nPrimero debe crear o cargar un AFD.")
-            else:
-                print("\n--- VALIDACIÓN Y ANÁLISIS ESTRUCTURAL ---")
-                errores = validar_afd(afd_actual)
-                transiciones_faltantes = []
-                for estado in afd_actual.Q:
-                    for simbolo in afd_actual.Sigma:
-                        if (estado, simbolo) not in afd_actual.delta:
-                            transiciones_faltantes.append((estado, simbolo))
+            if sesion.afnd is None and sesion.afd_activo() is None:
+                print("\nPrimero debe crear o cargar un autómata.")
+            if sesion.afnd is not None:
+                print("\n--- DEFINICIÓN FORMAL DEL AFND ORIGINAL ---")
+                print(sesion.afnd)
+                imprimir_tabla(*sesion.afnd.tabla_transiciones(), "TABLA DEL AFND")
+            afd = sesion.afd_activo()
+            if afd is not None:
+                titulo = "AFD GENERADO" if sesion.afd_generado else "AFD CARGADO"
+                print(f"\n--- DEFINICIÓN FORMAL DEL {titulo} ---")
+                print(afd)
+                imprimir_tabla(*afd.tabla_transiciones(), f"TABLA DEL {titulo}")
+            input("Presione Enter para continuar...")
 
+        elif opcion == "6":
+            if sesion.afnd is None and sesion.afd_activo() is None:
+                print("\nPrimero debe crear o cargar un autómata.")
+            if sesion.afnd is not None:
+                errores = validar_afnd(sesion.afnd)
                 if errores:
-                    print("Se encontraron errores de integridad:")
-                    for err in errores:
-                        print(f"  - {err}")
-
-                if transiciones_faltantes:
+                    print("\nEl AFND es inválido:")
+                    for error in errores:
+                        print(f"  - {error}")
+                else:
+                    print("\n✅ El AFND es formalmente válido.")
+            afd = sesion.afd_activo()
+            if afd is not None:
+                errores = validar_afd(afd)
+                faltantes = [(q, s) for q in afd.Q for s in afd.Sigma
+                             if (q, s) not in afd.delta]
+                otros_errores = [e for e in errores if not e.startswith("Falta transición")]
+                if otros_errores:
+                    print("\nEl AFD es inválido:")
+                    for error in errores:
+                        print(f"  - {error}")
+                elif faltantes:
+                    print("\nEl AFD es determinista, pero está incompleto:")
+                    for error in errores:
+                        print(f"  - {error}")
                     respuesta = input(
                         "¿Desea completar el AFD utilizando un estado de trampa? (S/N): "
                     ).strip().upper()
                     if respuesta == "S":
-                        nombre_trampa = completar_con_estado_trampa(
-                            afd_actual, transiciones_faltantes
-                        )
-                        print(f"Se creó el estado de trampa '{nombre_trampa}'.")
-                        errores = validar_afd(afd_actual)
-                        if errores:
-                            print("El autómata todavía presenta estos errores:")
-                            for err in errores:
-                                print(f"  - {err}")
-
-                if not errores:
-                    print("✅ El AFD es estructuralmente válido y determinista.")
-                    analisis = analizar_estructura(afd_actual)
-                    print("\nAnálisis estructural:")
-                    print(f"  Estados alcanzables: {analisis['alcanzables']}")
-                    print(f"  Estados inaccesibles: {analisis['inaccesibles']}")
-                    print(f"  Estados finales alcanzables: {analisis['finales_alcanzables']}")
-                    if analisis['lenguaje_vacio']:
-                        print("  ⚠️ El lenguaje reconocido podría ser vacío.")
-                    else:
-                        print("  El lenguaje reconocido no es vacío.")
-            input("Presione Enter para continuar...")
-
-        elif opcion == "6":
-            if afd_actual is None:
-                print("\nPrimero debe crear o cargar un AFD.")
-            else:
-                errores = validar_afd(afd_actual)
-                if errores:
-                    print("\nEl AFD no es válido. No se puede simular.")
-                    print("Ejecute la opción 5 para ver los errores.")
+                        nombre = completar_con_estado_trampa(afd, faltantes)
+                        print(f"Se creó el estado de trampa '{nombre}'.")
+                        if not validar_afd(afd):
+                            print("✅ El AFD ahora es válido, completo y determinista.")
                 else:
-                    cadena = input("Ingrese la cadena a evaluar: ").strip()
-                    try:
-                        resultado = simular(afd_actual, cadena)
-                        imprimir_traza(resultado, cadena)
-                        agregar_historial(afd_actual, cadena, resultado)
-                    except Exception as e:
-                        print(f"Error: {e}")
+                    print("\n✅ El AFD es válido, completo y determinista.")
             input("Presione Enter para continuar...")
 
         elif opcion == "7":
-            if afd_actual is None:
-                print("\nPrimero debe crear o cargar un AFD.")
+            if sesion.afnd is None:
+                print("\nNo hay un AFND cargado para convertir.")
             else:
-                errores = validar_afd(afd_actual)
+                errores = validar_afnd(sesion.afnd)
                 if errores:
-                    print("\nEl AFD no es válido. No se puede simular.")
-                    print("Ejecute la opción 5 para ver los errores.")
+                    print("\nEl AFND es inválido y no puede convertirse:")
+                    for error in errores:
+                        print(f"  - {error}")
                 else:
-                    ruta = input("Ingrese la ruta del archivo con cadenas: ").strip()
-                    try:
-                        with open(ruta, 'r', encoding='utf-8') as f:
-                            cadenas = []
-                            for linea in f:
-                                cadena = linea.strip()
-                                if not cadena:
-                                    continue
-                                # ε o epsilon representan la cadena vacía, no una transición.
-                                if cadena.casefold() in {"ε", "epsilon"}:
-                                    cadena = ""
-                                cadenas.append(cadena)
-                        if not cadenas:
-                            print("El archivo no contiene cadenas.")
-                        else:
-                            print(f"\nProcesando {len(cadenas)} cadenas...")
-                            for cadena in cadenas:
-                                try:
-                                    resultado = simular(afd_actual, cadena)
-                                    imprimir_traza(resultado, cadena)
-                                    agregar_historial(afd_actual, cadena, resultado)
-                                except Exception as e:
-                                    print(f"Error al evaluar '{cadena}': {e}")
-                    except Exception as e:
-                        print(f"Error al leer el archivo: {e}")
+                    sesion.afd_generado, sesion.equivalencias = convertir_afnd_a_afd(
+                        sesion.afnd
+                    )
+                    print("\nConversión realizada correctamente.")
+                    imprimir_tabla_equivalencias(sesion.equivalencias)
             input("Presione Enter para continuar...")
 
         elif opcion == "8":
-            if afd_actual is None:
-                print("\nPrimero debe crear o cargar un AFD.")
+            if sesion.equivalencias is None:
+                print("\nPrimero debe convertir un AFND.")
             else:
-                mostrar_historial(afd_actual)
+                imprimir_tabla_equivalencias(sesion.equivalencias)
             input("Presione Enter para continuar...")
 
         elif opcion == "9":
-            afd_actual = None
-            print("\nAFD actual descartado. Puede crear o cargar uno nuevo.")
+            if sesion.afd_generado is None:
+                print("\nPrimero debe convertir un AFND.")
+            else:
+                imprimir_tabla(
+                    *sesion.afd_generado.tabla_transiciones(),
+                    "TABLA DE TRANSICIÓN DEL AFD GENERADO"
+                )
             input("Presione Enter para continuar...")
 
         elif opcion == "10":
+            afd = sesion.afd_activo()
+            if afd is None:
+                print("\nNo hay un AFD disponible. Convierta primero el AFND.")
+            elif validar_afd(afd):
+                print("\nEl AFD no está completo y válido. Use la opción 6.")
+            else:
+                cadena = input("Ingrese la cadena a evaluar: ").strip()
+                try:
+                    resultado = simular(afd, cadena)
+                    imprimir_traza(resultado, cadena)
+                    agregar_historial(afd, cadena, resultado)
+                except Exception as e:
+                    print(f"Error: {e}")
+            input("Presione Enter para continuar...")
+
+        elif opcion == "11":
+            afd = sesion.afd_activo()
+            if afd is None:
+                print("\nNo hay un AFD disponible. Convierta primero el AFND.")
+            elif validar_afd(afd):
+                print("\nEl AFD no está completo y válido. Use la opción 6.")
+            else:
+                ruta = input("Ingrese la ruta del archivo con cadenas: ").strip()
+                try:
+                    with open(ruta, "r", encoding="utf-8") as archivo:
+                        cadenas = []
+                        for linea in archivo:
+                            cadena = linea.strip()
+                            if not cadena:
+                                continue
+                            if cadena.casefold() in {"ε", "epsilon"}:
+                                cadena = ""
+                            cadenas.append(cadena)
+                    if not cadenas:
+                        print("El archivo no contiene cadenas.")
+                    for cadena in cadenas:
+                        try:
+                            resultado = simular(afd, cadena)
+                            imprimir_traza(resultado, cadena)
+                            agregar_historial(afd, cadena, resultado)
+                        except Exception as e:
+                            print(f"Error al evaluar '{cadena}': {e}")
+                except Exception as e:
+                    print(f"Error al leer el archivo: {e}")
+            input("Presione Enter para continuar...")
+
+        elif opcion == "12":
+            afd = sesion.afd_activo()
+            if afd is None:
+                print("\nNo hay un AFD disponible. Convierta primero el AFND.")
+            else:
+                mostrar_historial(afd)
+            input("Presione Enter para continuar...")
+
+        elif opcion == "13":
+            afd = sesion.afd_activo()
+            if afd is None:
+                print("\nNo hay un AFD disponible. Convierta primero el AFND.")
+            elif validar_afd(afd):
+                print("\nEl AFD no está completo y válido. Use la opción 6.")
+            else:
+                analisis = analizar_estructura(afd)
+                print("\n--- ANÁLISIS ESTRUCTURAL ---")
+                print(f"Estados alcanzables: {analisis['alcanzables']}")
+                print(f"Estados inaccesibles: {analisis['inaccesibles']}")
+                print(f"Finales alcanzables: {analisis['finales_alcanzables']}")
+                print(f"Lenguaje vacío: {analisis['lenguaje_vacio']}")
+            input("Presione Enter para continuar...")
+
+        elif opcion == "14":
+            sesion.reiniciar()
+            print("\nAutómatas, equivalencias e historiales anteriores descartados.")
+            input("Presione Enter para continuar...")
+
+        elif opcion == "15":
             print("\nSaliendo del programa. ¡Hasta luego!")
             break
 
